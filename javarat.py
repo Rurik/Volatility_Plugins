@@ -59,7 +59,7 @@ class JavaRATScan(taskmods.PSList):
         addr_space = utils.load_as(self._config)
         rules = yara.compile(sources = signatures)
         for task in self.filter_tasks(tasks.pslist(addr_space)):
-            if 'vmwareuser.exe' in task.ImageFileName.lower():
+            if 'vmwareuser.exe' == task.ImageFileName.lower():
                 continue
             if not 'java' in task.ImageFileName.lower():
                 continue
@@ -88,7 +88,7 @@ class JavaRATScan(taskmods.PSList):
         delim = '-=' * 39 + '-'
         rules = yara.compile(sources = signatures)
         outfd.write('YARA rule: {0}\n'.format(signatures))
-        outfd.write('YARA Offset: {0}\n'.format(self._config.YARAOFFSET))
+        outfd.write('YARA offset: {0}\n'.format(self._config.YARAOFFSET))
         outfd.write('Configuration size: {0}\n'.format(self._config.CONFSIZE))
         for task, address in data:  # iterate the yield values from calculate()
             outfd.write('{0}\n'.format(delim))
