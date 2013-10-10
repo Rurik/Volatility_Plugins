@@ -1,6 +1,4 @@
-# JavaRAT detection and analysis for Volatility 2.0
-#
-# Version 1.0 
+# JavaRAT detection and analysis for Volatility - v 1.0
 # This version is limited to JavaRAT's clients 3.0 and 3.1, and maybe others 
 # Author: Brian Baskin <brian@thebaskins.com>
 #
@@ -23,7 +21,7 @@ import volatility.win32.tasks as tasks
 import volatility.utils as utils
 import volatility.debug as debug
 import volatility.plugins.malware.malfind as malfind
-
+import volatility.conf as conf
 import string
 
 try:
@@ -36,68 +34,67 @@ signatures = {
     'javarat_conf' : 'rule javarat_conf {strings: $a = /port=[0-9]{1,5}SPLIT/ condition: $a}'
 }
 
+config = conf.ConfObject()
+config.add_option('CONFSIZE', short_option = 'C', default = 256,
+                           help = 'Config file size',
+                           action = 'store', type = 'int')
+config.add_option('YARAOFFSET', short_option = 'Y', default = 0,
+                           help = 'YARA start offset',
+                           action = 'store', type = 'int')
+
 class JavaRATScan(taskmods.PSList):
-    """Detect Java processes infected with Java RAT"""
+    """ Extract JavaRAT Configuration from Java processes """
 
     def get_vad_base(self, task, address):
-        """ Get the VAD starting address """        
-
         for vad in task.VadRoot.traverse():
             if address >= vad.Start and address < vad.End:
                 return vad.Start
         return None
 
     def calculate(self):
+        """ Required: Runs YARA search to find hits """ 
         if not has_yara:
-            debug.error("Yara must be installed for this plugin")
+            debug.error('Yara must be installed for this plugin')
 
         addr_space = utils.load_as(self._config)
         rules = yara.compile(sources = signatures)
         for task in self.filter_tasks(tasks.pslist(addr_space)):
-            if "java" not in task.ImageFileName.lower():
+            if 'vmwareuser.exe' in task.ImageFileName.lower():
                 continue
-
+            if not 'java' in task.ImageFileName.lower():
+                continue
             scanner = malfind.VadYaraScanner(task = task, rules = rules)
             for hit, address in scanner.scan():
                 vad_base_addr = self.get_vad_base(task, address)
-                yield task, vad_base_addr
-                break
+                yield task, address
 
-    def render_text(self, outfd, data):
-        self.table_header(outfd, [("Name", "20"), 
-                                  ("PID", "8"),
-                                  ("Data VA", "[addrpad]")])
-        for task, start in data:
-            self.table_row(outfd, task.ImageFileName, task.UniqueProcessId, start)
-
-
-class JavaRATConfig(JavaRATScan):
-    """Locate and parse the Java RAT configuration"""
-    
     def make_printable(self, input):
+        """ Optional: Remove non-printable chars from a string """
         input = input.replace('\x09', '')  # string.printable doesn't remove backspaces
         return ''.join(filter(lambda x: x in string.printable, input))
 
     def parse_structure(self, data):
+        """ Optional: Parses the data into a list of values """
         struct = []
         items = data.split('SPLIT')
-        for i in range(len(items) - 1):
+        for i in range(len(items) - 1):  # Iterate this way to ignore any slack data behind last 'SPLIT'
             item = self.make_printable(items[i])
             field, value = item.split('=')
-            struct.append("%s: %s" % (field, value))
+            struct.append('%s: %s' % (field, value))
         return struct
     
     def render_text(self, outfd, data):
-        delim = '-' * 80
+        """ Required: Parse data and display """
+        delim = '-=' * 39 + '-'
         rules = yara.compile(sources = signatures)
-
-        for task, start in data:
-            outfd.write("{0}\n".format(delim))
+        outfd.write('YARA rule: {0}\n'.format(signatures))
+        outfd.write('YARA Offset: {0}\n'.format(self._config.YARAOFFSET))
+        outfd.write('Configuration size: {0}\n'.format(self._config.CONFSIZE))
+        for task, address in data:  # iterate the yield values from calculate()
+            outfd.write('{0}\n'.format(delim))
+            outfd.write('Process: {0} ({1})\n\n'.format(task.ImageFileName, task.UniqueProcessId))
             proc_addr_space = task.get_process_address_space()
-            scanner = malfind.VadYaraScanner(task = task, rules = rules)
-            for hit, address in scanner.scan():
-                vad_base_addr = self.get_vad_base(task, address)
-                config = self.parse_structure(proc_addr_space.read(address, 384))
-                outfd.write('Process: {0} ({1})\n\n'.format(task.ImageFileName, task.UniqueProcessId))
-                for i in config:
-                    outfd.write('\t' + i + '\n')
+            conf_data = proc_addr_space.read(address + self._config.YARAOFFSET, self._config.CONFSIZE)
+            config = self.parse_structure(conf_data)
+            for i in config:
+                outfd.write('\t{0}\n'.format(i))
